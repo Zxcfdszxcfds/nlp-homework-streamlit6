@@ -2,6 +2,7 @@ import streamlit as st
 from transformers import BertTokenizer, BertModel
 import torch
 import numpy as np
+import pandas as pd
 import re
 
 # ---------------------- 页面配置 ----------------------
