@@ -1,5 +1,6 @@
 streamlit
+nltk
+transformers
+torch
 spacy
-en-core-web-sm
-pandas
-pyvis
+numpy
