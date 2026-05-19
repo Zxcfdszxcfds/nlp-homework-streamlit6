@@ -5,8 +5,7 @@ from nltk.wsd import lesk
 from transformers import BertTokenizer, BertModel
 import torch
 import numpy as np
-import spacy
-from spacy import displacy
+import re
 
 # ---------------------- 页面配置 ----------------------
 st.set_page_config(
@@ -21,10 +20,6 @@ def load_bert():
     tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
     model = BertModel.from_pretrained("bert-base-uncased")
     return tokenizer, model
-
-@st.cache_resource
-def load_spacy():
-    return spacy.load("en_core_web_sm")
 
 # ---------------------- 模块1：词义消歧（WSD） ----------------------
 def lesk_wsd(sentence, word):
@@ -57,29 +52,59 @@ def cosine_similarity(a, b):
     """计算余弦相似度"""
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
-# ---------------------- 模块2：语义角色标注（SRL） ----------------------
-def simple_srl(text, nlp):
-    """基于spaCy的轻量级语义角色标注"""
-    doc = nlp(text)
-    srl_results = []
-    for token in doc:
-        if token.pos_ == "VERB":
-            predicate = token.text
-            args = {}
-            for child in token.children:
-                if child.dep_ == "nsubj":
-                    args["A0 (Agent)"] = child.text
-                elif child.dep_ == "dobj":
-                    args["A1 (Patient)"] = child.text
-                elif child.dep_ == "prep":
-                    for grandchild in child.children:
-                        if grandchild.dep_ == "pobj":
-                            if child.text in ["in", "at", "on"]:
-                                args["AM-LOC"] = grandchild.text
-                            elif child.text in ["for", "by"]:
-                                args["AM-TMP"] = grandchild.text
-            srl_results.append({"Predicate": predicate, **args})
-    return srl_results, doc
+# ---------------------- 模块2：语义角色标注（SRL，纯Python实现） ----------------------
+def simple_srl(text):
+    """基于规则的轻量级语义角色标注"""
+    doc = nltk.pos_tag(nltk.word_tokenize(text))
+    dependencies = {}
+    
+    # 1. 找到动词作为谓词
+    predicates = []
+    for i, (word, pos) in enumerate(doc):
+        if pos.startswith("VB"):
+            predicates.append((word, i))
+    
+    results = []
+    for pred_word, pred_idx in predicates:
+        args = {"Predicate": pred_word}
+        
+        # 2. 找主语（名词短语，位于动词前）
+        for i in range(pred_idx):
+            word, pos = doc[i]
+            if pos in ["NNP", "NN", "NNS"] and word not in ["the", "a", "an"]:
+                args["A0 (Agent)"] = word
+                break
+        
+        # 3. 找宾语（名词短语，位于动词后）
+        for i in range(pred_idx + 1, len(doc)):
+            word, pos = doc[i]
+            if pos in ["NNP", "NN", "NNS"] and word not in ["the", "a", "an"]:
+                args["A1 (Patient)"] = word
+                break
+        
+        # 4. 找地点/时间修饰语（简单介词短语识别）
+        prep_words = ["in", "at", "on", "for", "by"]
+        for i in range(len(doc)):
+            word, pos = doc[i]
+            if word in prep_words and i + 1 < len(doc):
+                next_word, next_pos = doc[i+1]
+                if next_pos in ["NNP", "NN", "NNS"]:
+                    if word in ["in", "at", "on"]:
+                        args["AM-LOC"] = next_word
+                    elif word in ["for", "by"]:
+                        args["AM-TMP"] = next_word
+                    break
+        
+        results.append(args)
+    return results
+
+def get_srl_tree_text(text):
+    """生成简单的依存关系文本，模拟displacy效果"""
+    doc = nltk.pos_tag(nltk.word_tokenize(text))
+    tree_text = []
+    for word, pos in doc:
+        tree_text.append(f"{word} ({pos})")
+    return "\n".join(tree_text)
 
 # ---------------------- 页面内容 ----------------------
 st.title("📚 语义分析综合平台")
@@ -130,25 +155,20 @@ with tab1:
 # ---------------------- 模块2：语义角色标注 ----------------------
 with tab2:
     st.header("🎭 语义角色标注（SRL）提取与可视化")
-    st.markdown("基于spaCy的轻量级语义角色标注，提取谓词与论元")
-    
-    # 加载模型
-    nlp = load_spacy()
+    st.markdown("基于规则的轻量级语义角色标注，提取谓词与论元")
     
     input_text = st.text_input("输入句子", value="Apple is manufacturing new smartphones in China this year.")
     
     if st.button("执行SRL标注", key="srl_btn"):
         with st.spinner("分析中..."):
-            results, doc = simple_srl(input_text, nlp)
+            results = simple_srl(input_text)
             
             st.subheader("结构化结果")
             if results:
                 st.dataframe(pd.DataFrame(results))
             
-            st.subheader("依存关系可视化")
-            # 生成displacy HTML
-            html = displacy.render(doc, style="dep", jupyter=False)
-            st.markdown(f'<div style="overflow-x: auto;">{html}</div>', unsafe_allow_html=True)
+            st.subheader("依存关系文本")
+            st.text(get_srl_tree_text(input_text))
 
 # ---------------------- 页脚 ----------------------
 st.markdown("---")
